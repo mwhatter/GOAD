@@ -12,10 +12,10 @@ echo "[+] Current folder $(pwd)"
 echo "[+] Ansible command : $ANSIBLE_COMMAND"
 
 function run_ansible {
-    # Check if the maximum number of retries is reached, then exit with an error code
     if [ $RESTART_COUNT -eq $MAX_RETRY ]; then
-        echo "$ERROR $MAX_RETRY restarts occurred, exiting..."
-        exit 2
+        echo "$ERROR $MAX_RETRY retries occurred, moving to next playbook..."
+        RESTART_COUNT=0
+        return 1
     fi
 
     echo "[+] Restart counter: $RESTART_COUNT"
@@ -23,23 +23,22 @@ function run_ansible {
 
     echo "$OK Running command: $ANSIBLE_COMMAND $1"
 
-    # Run the command with a timeout of 20 minutes to avoid failure when ansible is stuck
     timeout 20m $ANSIBLE_COMMAND $1
-    exit_code=$(echo $?)
+    exit_code=$?
 
-    if [ $exit_code -eq 4 ]; then # ansible result code 4 = RUN_UNREACHABLE_HOSTS
+    if [ $exit_code -eq 4 ]; then
         echo "$ERROR Error while running: $ANSIBLE_COMMAND $1"
         echo "$ERROR Some hosts were unreachable, we are going to retry"
         run_ansible $1
 
-    elif [ $exit_code -eq 124 ]; then # Command has timed out, relaunch the ansible playbook
+    elif [ $exit_code -eq 124 ]; then
         echo "$ERROR Error while running: $ANSIBLE_COMMAND $1"
         echo "$ERROR Command has reached the timeout limit of 20 minutes, we are going to retry"
         run_ansible $1
 
-    elif [ $exit_code -eq 0 ]; then # ansible result code 0 = RUN_OK
+    elif [ $exit_code -eq 0 ]; then
         echo "$OK Command successfully executed"
-        RESTART_COUNT=0 # Reset the counter for the next playbook
+        RESTART_COUNT=0
         return 0
 
     else
@@ -49,41 +48,21 @@ function run_ansible {
     fi
 }
 
-# We run all the recipes separately to minimize faillure
+# We run all the recipes separately to minimize failure
+playbooks=("build.yml" "ad-servers.yml" "ad-parent_domain.yml" "ad-child_domain.yml" "ad-members.yml" "ad-trusts.yml" "ad-data.yml" "ad-gmsa.yml" "laps.yml" "ad-relations.yml" "adcs.yml" "ad-acl.yml" "servers.yml" "security.yml" "vulnerabilities.yml" "reboot.yml")
+
 echo "[+] Running all the playbook to setup the lab"
-run_ansible build.yml
+for playbook in "${playbooks[@]}"; do
+    run_ansible $playbook
+    if [ $? -ne 0 ]; then
+        echo "$INFO Moving to next playbook after retry limit reached for $playbook"
+    fi
 
-run_ansible ad-servers.yml
+    # Special case for waiting after child domain creation
+    if [ "$playbook" = "ad-child_domain.yml" ]; then
+        echo "$INFO Waiting 5 minutes for the child domain to be ready"
+        sleep 5m
+    fi
+done
 
-run_ansible ad-parent_domain.yml
-
-# Wait after the child domain creation before adding servers
-run_ansible ad-child_domain.yml
-echo "$INFO Waiting 5 minutes for the child domain to be ready"
-sleep 5m
-
-run_ansible ad-members.yml
-
-run_ansible ad-trusts.yml
-
-run_ansible ad-data.yml
-
-run_ansible ad-gmsa.yml
-
-run_ansible laps.yml
-
-run_ansible ad-relations.yml
-
-run_ansible adcs.yml
-
-run_ansible ad-acl.yml
-
-run_ansible servers.yml
-
-run_ansible security.yml
-
-run_ansible vulnerabilities.yml
-
-run_ansible reboot.yml
-
-echo "$OK your lab is successfully setup ! have fun ;)"
+echo "$OK your lab is successfully set up! Have fun ;)"
